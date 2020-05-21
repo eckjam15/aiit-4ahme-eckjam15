@@ -6,16 +6,15 @@
 package Server_Client_Stoppuhr;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonSyntaxException;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.logging.Level;
-import java.util.logging.Logger;
-import jdk.nashorn.internal.ir.RuntimeNode;
 
 
 
@@ -34,38 +33,47 @@ public class Server {
     public void start(int port) throws IOException{
         
         serverSocket = new ServerSocket(port);
-        Socket socket = null;
         
         while(true){
-            socket = serverSocket.accept();
+            final Socket socket = serverSocket.accept();
+            
+            for(ConnectionHandler h : handlers){
+                if(h.isClosed()){
+                    handlers.remove(h);
+                }
+            }
+            
+            if(handlers.size() == 3) {
+                socket.close();
+                continue;
+            }
+            
             final ConnectionHandler handler = new ConnectionHandler(socket);
             new Thread(handler).start();
             handlers.add(handler);
-            
-            if(handlers.size() == 3){
-                serverSocket.close();
-            }else{
-                serverSocket.accept();
-            }
         }
     }
     
     public boolean isTimerRunning(){
-        
+        return startMillis > 0;
     }
     
     public long getTimerMillis(){
-        return timeOffset;
+        if(startMillis > 0){
+            return System.currentTimeMillis() - startMillis + timeOffset;
+        }else{
+            return timeOffset;
+        }
     }
     
-    public static void main(String[] args) {
-        new Server();
+    public static void main(String[] args) throws IOException {
+        new Server().start(8080);
     }
 
 
     public class ConnectionHandler implements Runnable {
-
-        private Socket socket;
+        
+        private final Socket socket;
         private boolean master;
 
         public ConnectionHandler(Socket socket){
@@ -81,48 +89,73 @@ public class Server {
         }
 
         @Override
-        public void run() {
-            try{
-                BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-                String req = reader.readLine();
-                
-                Gson gson = new Gson();
-                Request r = gson.fromJson(req, Request.class);
+        public synchronized void run() {
+            int count = 0;
 
-                 if(r.isMaster()){
-                    boolean setMasterTrue = true;
-                    for(ConnectionHandler h : handlers){
-                        if(h != this && h.isMaster() == true){
-                            setMasterTrue = false;
-                        }
+            while(true) {
+                try {
+                    final BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+                    final OutputStreamWriter writer = new OutputStreamWriter(socket.getOutputStream());
+                    final String req = reader.readLine();
+                    
+                    if(req == null) {
+                        socket.close();
+                        break;
                     }
-                    master = setMasterTrue;
-                }
-                 
-                 if(r.isStart()){
-                     
-                 }
+                    
+                    count++;
+                    final Gson gson = new Gson();
+                    final Request r = gson.fromJson(req, Request.class);
 
-                 if(r.isStop()){
-                     startMillis = 0;
-                 }else{
-                     timeOffset = System.currentTimeMillis() - startMillis;
-                 }
-                 
-                 if(r.isClear()){
-                     timeOffset = 0;
-                 }
-                 
-                 if(r.isEnd()){
-                     socket.close();
-                     handlers.remove(this);
-                 }
-                 
-                 Response resp = new Response(master, r.isStop(), timeOffset);
-                 
-            }catch(Exception ex){
-                ex.printStackTrace();
+                    if(r.isMaster()) {
+                        boolean setMasterTrue = true;
+                        for(ConnectionHandler h : handlers){
+                            if(!h.equals(this) && h.isMaster() == true){
+                                setMasterTrue = false;
+                                break;
+                            }
+                        }
+                        master = setMasterTrue;
+                    }
+
+                    if(r.isMaster()){
+                        if(r.isStart()){
+                            startMillis = System.currentTimeMillis();
+                        }
+                        
+                        if(r.isStop()){
+                            startMillis = 0;
+                        } else{
+                            timeOffset = System.currentTimeMillis() - startMillis + timeOffset;
+                        }
+
+                        if(r.isClear()) {
+                            timeOffset = 0;
+                            if(isTimerRunning()) {
+                                startMillis = System.currentTimeMillis();
+                            } else {
+                                startMillis = 0;
+                            } 
+                        }
+
+                        if(r.isEnd()) {
+                            serverSocket.close();
+                            socket.close();
+                            handlers.clear();
+                            return;
+                        }        
+                    }
+                    
+                    //Response
+                    final Response resp = new Response(master, count, isTimerRunning(), getTimerMillis());
+                    final String respString = gson.toJson(resp);
+                    writer.write(respString);
+                    writer.flush();
+
+                } catch(JsonSyntaxException | IOException ex) {
+                } 
             }
+
         }
     }
 }
