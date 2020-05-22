@@ -31,26 +31,29 @@ public class Server {
     private long startMillis;
     
     public void start(int port) throws IOException{
+       serverSocket = new ServerSocket(port);
         
-        serverSocket = new ServerSocket(port);
-        
-        while(true){
+        while(true) {
             final Socket socket = serverSocket.accept();
-            
-            for(ConnectionHandler h : handlers){
-                if(h.isClosed()){
-                    handlers.remove(h);
+            synchronized(handlers) {
+                for(int i = 0; i < handlers.size(); i++) {
+                    ConnectionHandler h = handlers.get(i);
+                    if(h.isClosed()) {
+                        handlers.remove(h);
+                    }
+                }   
+                
+                if(handlers.size() == 3) {
+                    socket.close();
+                    continue;
                 }
             }
-            
-            if(handlers.size() == 3) {
-                socket.close();
-                continue;
-            }
-            
+
             final ConnectionHandler handler = new ConnectionHandler(socket);
             new Thread(handler).start();
-            handlers.add(handler);
+            synchronized(handler) {
+                handlers.add(handler);
+            }
         }
     }
     
@@ -89,7 +92,7 @@ public class Server {
         }
 
         @Override
-        public synchronized void run() {
+        public void run() {
             int count = 0;
 
             while(true) {
@@ -100,19 +103,22 @@ public class Server {
                     
                     if(req == null) {
                         socket.close();
-                        break;
+                        return;
                     }
-                    
                     count++;
+                    System.out.println(req);
                     final Gson gson = new Gson();
                     final Request r = gson.fromJson(req, Request.class);
 
                     if(r.isMaster()) {
                         boolean setMasterTrue = true;
-                        for(ConnectionHandler h : handlers){
-                            if(!h.equals(this) && h.isMaster() == true){
-                                setMasterTrue = false;
-                                break;
+                        synchronized(handlers) {
+                            for(int i = 0; i < handlers.size(); i++) {
+                                ConnectionHandler h = handlers.get(i);
+                                if(h != this && h.isMaster()) {
+                                    setMasterTrue = false;
+                                    break;
+                                }
                             }
                         }
                         master = setMasterTrue;
@@ -126,7 +132,9 @@ public class Server {
                         if(r.isStop()){
                             startMillis = 0;
                         } else{
-                            timeOffset = System.currentTimeMillis() - startMillis + timeOffset;
+                            if(isTimerRunning()){
+                                timeOffset = System.currentTimeMillis() - startMillis + timeOffset;
+                            }
                         }
 
                         if(r.isClear()) {
@@ -146,16 +154,18 @@ public class Server {
                         }        
                     }
                     
-                    //Response
-                    final Response resp = new Response(master, count, isTimerRunning(), getTimerMillis());
+                   //Response
+                    final Response resp = new Response(master, count, isTimerRunning(), getTimerMillis(), socket.toString());
                     final String respString = gson.toJson(resp);
                     writer.write(respString);
                     writer.flush();
-
-                } catch(JsonSyntaxException | IOException ex) {
+                    System.out.println(respString);
+                    
+                } catch(Exception ex) {
+                    ex.printStackTrace();
+                    return;
                 } 
             }
-
         }
     }
 }
