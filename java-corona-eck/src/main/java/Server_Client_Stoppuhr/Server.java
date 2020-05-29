@@ -58,14 +58,18 @@ public class Server {
     }
     
     public boolean isTimerRunning(){
-        return startMillis > 0;
+         synchronized(handlers) {
+            return startMillis > 0;    
+        }
     }
     
     public long getTimerMillis(){
-        if(startMillis > 0){
-            return System.currentTimeMillis() - startMillis + timeOffset;
-        }else{
-            return timeOffset;
+        synchronized(handlers) {
+            if(startMillis > 0) {
+                return System.currentTimeMillis() - startMillis + timeOffset;
+            } else {
+                return timeOffset;
+            } 
         }
     }
     
@@ -123,35 +127,38 @@ public class Server {
                         }
                         master = setMasterTrue;
                     }
-
-                    if(r.isMaster()){
-                        if(r.isStart()){
-                            startMillis = System.currentTimeMillis();
-                        }
-                        
-                        if(r.isStop()){
-                            startMillis = 0;
-                        } else{
-                            if(isTimerRunning()){
-                                timeOffset = System.currentTimeMillis() - startMillis + timeOffset;
-                            }
-                        }
-
-                        if(r.isClear()) {
-                            timeOffset = 0;
-                            if(isTimerRunning()) {
+                    synchronized(handlers) {
+                        if(r.isMaster()) {
+                            if(r.isStart()) {
                                 startMillis = System.currentTimeMillis();
-                            } else {
-                                startMillis = 0;
-                            } 
-                        }
+                            }
 
-                        if(r.isEnd()) {
-                            serverSocket.close();
-                            socket.close();
-                            handlers.clear();
-                            return;
-                        }        
+                            if(r.isStop()) {
+                                startMillis = 0;
+                            } else {
+                                if(isTimerRunning()) {
+                                    timeOffset = System.currentTimeMillis() - startMillis + timeOffset;
+                                }  
+                            }
+
+                            if(r.isClear()) {
+                                timeOffset = 0;
+                                if(isTimerRunning()) {
+                                    startMillis = System.currentTimeMillis();
+                                } else {
+                                    startMillis = 0;
+                                } 
+                            }
+
+                            if(r.isEnd()) {
+                                serverSocket.close();
+                                socket.close();
+                                synchronized(handlers) {
+                                    handlers.remove(this);
+                                }
+                                return;
+                            }        
+                        }
                     }
                     
                    //Response
